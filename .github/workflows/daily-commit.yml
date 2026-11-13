@@ -1,0 +1,57 @@
+name: Daily commit safety net
+
+on:
+  schedule:
+    # 18:30 UTC = 23:30 Karachi time, every day
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Count my commits today (UTC day, same as the contribution graph)
+        id: count
+        env:
+          GH_TOKEN: ${{ secrets.CONTRIB_TOKEN }}
+          USERNAME: ${{ github.repository_owner }}
+        run: |
+          FROM=$(date -u +%Y-%m-%dT00:00:00Z)
+          TO=$(date -u +%Y-%m-%dT23:59:59Z)
+          COUNT=$(gh api graphql \
+            -f query='query($login:String!,$from:DateTime!,$to:DateTime!){user(login:$login){contributionsCollection(from:$from,to:$to){totalCommitContributions restrictedContributionsCount}}}' \
+            -f login="$USERNAME" -f from="$FROM" -f to="$TO" \
+            --jq '.data.user.contributionsCollection | .totalCommitContributions + .restrictedContributionsCount')
+          echo "Commits today: $COUNT"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Make a small commit if nothing was committed today
+        if: steps.count.outputs.count == '0'
+        env:
+          GIT_NAME: ${{ github.repository_owner }}
+          GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
+        run: |
+          mkdir -p .daily
+          TODAY=$(date -u +%Y-%m-%d)
+          echo "Last checked: $TODAY" > .daily/last-checked.md
+          echo "- $TODAY: routine upkeep" >> .daily/changelog.md
+
+          MESSAGES=(
+            "chore: routine upkeep"
+            "docs: update changelog"
+            "chore: refresh project notes"
+            "chore: daily maintenance"
+            "docs: tidy notes"
+          )
+          MSG=${MESSAGES[$RANDOM % ${#MESSAGES[@]}]}
+
+          git config user.name "$GIT_NAME"
+          git config user.email "$GIT_EMAIL"
+          git add .daily
+          git commit -m "$MSG"
+          git push
